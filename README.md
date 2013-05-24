@@ -48,7 +48,7 @@ See the file, COPYING, for licensing information.
 Requirements
 ------------
 
-* Ruby 1.9 or later.
+* Ruby 1.9 or later, with the "tk" extension (e.g., "require 'tk'" must work).
 
   Windows users can download [the latest Ruby 1.9
   rubyinstaller](http://rubyinstaller.org/downloads/) ("Ruby 1.9.3-p429"
