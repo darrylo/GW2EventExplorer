@@ -109,6 +109,8 @@ Known Issues
 TODO
 ----
 
+Possible future tasks, in no particular order:
+
 * Add desktop, smartphone, and tablet notifications for events.
   Notifications can occur when an event's state changes, or when an
   event enters a particular state (this is useful for seeing when a
@@ -137,8 +139,12 @@ TODO
   and the growl program forwards the message to your smartphone or
   tablet.
 
+* Configurable update times.  Right now, updates occur every 5 minutes.
+
 * "Sticky events"  This is the ability to mark an event as "sticky",
   which means that it will always be shown, even if you have limited the
   event display to a different map.
 
-* Configurable update times.  Right now, updates occur every 5 minutes.
+* Unlike sticky events, should there be a way to always "hide" an event?
+
+* The ability to limit event display via a regular expression.

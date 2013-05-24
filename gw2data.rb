@@ -7,7 +7,7 @@
 #		it into a sqlite database
 # Author:       Darryl Okahata
 # Created:      Tue May 21 18:05:39 2013
-# Modified:     Fri May 24 00:40:43 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 24 10:10:29 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -95,6 +95,7 @@ module GW2
   end
 
   def GW2.get_uri_json(uri)
+    GW2::DebugLog.print "Getting: '#{uri}'\n"
     uri = URI(URI.encode(uri))
 
     http = Net::HTTP.new(uri.host, uri.port)
@@ -304,7 +305,9 @@ module GW2
       @world_names = {}
       load_metadata
       if need_metadata then
+        GW2::DebugLog.print "Need metadata\n"
         update_metadata
+        load_metadata
       end
       @current_generation = get_current_generation
       @previous_generation = 0
@@ -368,6 +371,7 @@ module GW2
     end
 
     def load_metadata()
+      GW2::DebugLog.print "Trying to load metadata from db\n"
       @world_names = load_a_metadata_table("world_names", true)
       @map_names = load_a_metadata_table("map_names", true)
       @event_names = load_a_metadata_table("event_names")
@@ -375,6 +379,7 @@ module GW2
     end
 
     def update_metadata
+      GW2::DebugLog.print "Updating metadata from anet\n"
       @event_names = GW2.get_names_id_mapping("https://api.guildwars2.com/v1/event_names.json" + @lang)
       update_metadata_table(@event_names, "event_names")
 
@@ -408,6 +413,7 @@ module GW2
     end
 
     def update_eventdata(world = nil)
+      GW2::DebugLog.print "update_eventdata(#{world})\n"
       append = ""
       update_time = Time.now
       if world then
@@ -419,6 +425,9 @@ module GW2
       uri = "https://api.guildwars2.com/v1/events.json" + append
       data = GW2.get_uri_json(uri)
       if data then
+        if data.empty? then
+          GW2::DebugLog.print "***** EMPTY DATA RECEIVED\n"
+        end
         check_eventdata_table
         check_generation_table
         @previous_generation = @current_generation
@@ -438,6 +447,8 @@ module GW2
           @db.execute("INSERT INTO generation_data (generation,update_time) VALUES ('#{@current_generation}',#{update_time.to_f});")
         }
         # @db.execute("VACUUM;")
+      else
+        GW2::DebugLog.print "***** NO DATA RECEIVED\n"
       end
       update_generations
     end
@@ -446,7 +457,7 @@ module GW2
       id = nil
       @world_names.each { |world_id, world_name|
         if world_name == name then
-          id = world_id
+          id = world_id.to_i
           break
         end
       }
@@ -457,7 +468,7 @@ module GW2
       id = nil
       @map_names.each { |map_id, map_name|
         if map_name == name then
-          id = map_id
+          id = map_id.to_i
           break
         end
       }

@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 24 00:41:17 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 24 10:22:22 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental (Do Not Distribute)
@@ -611,9 +611,7 @@ class GW2EventExplorer
   end
 
   def process_data_update(world)
-    if GW2EventExplorer::DEBUG then
-      GW2::DebugLog.print "\nGOT UPDATE (#{world}/#{world.class})\n\n"
-    end
+    GW2::DebugLog.print "\nGOT UPDATE (#{world}/#{world.class})\n\n"
     @data_manager.db_synchronize {
       if world.class == String then
         world_id = @data_manager.world_id_from_name(world)
@@ -621,9 +619,7 @@ class GW2EventExplorer
         world_id = world
       end
 
-      if GW2EventExplorer::DEBUG then
-        GW2::DebugLog.print "Update world '#{world}' (#{world_id})\n"
-      end
+      GW2::DebugLog.print "Update world '#{world}' (#{world_id})\n"
       @data_manager.update_eventdata(world_id)
     }
 
@@ -636,9 +632,7 @@ class GW2EventExplorer
       world_id = @task_queue.pop
       begin
         begin
-          if GW2EventExplorer::DEBUG then
-            GW2::DebugLog.print "Update request for world id '#{world_id}'\n"
-          end
+          GW2::DebugLog.print "Update request for world id '#{world_id}'\n"
           @updating = true
           if process_data_update(world_id) then
             @gui_queue.push("update")
@@ -647,19 +641,13 @@ class GW2EventExplorer
               g = @data_manager.get_update_generations(world_id)
               if g.size > @max_generations then
                 cutoff = g[@max_generations]
-                if GW2EventExplorer::DEBUG then
-                  GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
-                end
+                GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
                 @data_manager.delete_old_generations(cutoff)
                 if update_count % VACUUM_ITERATIONS == 0 then
-                  if GW2EventExplorer::DEBUG then
-                    s = Time.now
-                    GW2::DebugLog.print "Vacuuming ...\n"
-                  end
+                  s = Time.now
+                  GW2::DebugLog.print "Vacuuming ...\n"
                   @data_manager.vacuum
-                  if GW2EventExplorer::DEBUG then
-                    GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
-                  end
+                  GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
                 end
               end
             }
@@ -681,25 +669,29 @@ class GW2EventExplorer
 
   def gui_monitor
     world_id = nil
-    last_time = nil
+    last_update_time = nil
+    last_request_time = nil
     @data_manager.db_synchronize {
       world_id = @data_manager.world_id_from_name(@server_wid.to_s)
-      last_time = @data_manager.get_last_update_time(world_id)
+      last_update_time = @data_manager.get_last_update_time(world_id)
     }
-    #print "last update time = #{last_time} (now: #{Time.now})\n"
-    if (Time.now - last_time).to_f > @update_interval then
-      if not @updating then
-        if GW2EventExplorer::DEBUG then
+    #print "last update time = #{last_update_time} (now: #{Time.now})\n"
+    current_time = Time.now
+    if (current_time - last_update_time).to_f > @update_interval then
+      if last_request_time.nil? ||
+         ((current_time - last_request_time) >= 60) then
+        if not @updating then
           GW2::DebugLog.print "sending update request for '#{@server_wid.to_s}' (#{world_id})\n"
+          @task_queue.push(world_id)
+          last_request_time = current_time
         end
-        @task_queue.push(world_id)
+      else
+        GW2::DebugLog.print "***** Not sending request (#{(current_time - last_request_time).to_f} < 60)\n"
       end
     end
     if not @gui_queue.empty? then
       item = @gui_queue.pop
-      if GW2EventExplorer::DEBUG then
-        GW2::DebugLog.print "Got back: '#{item}'\n"
-      end
+      GW2::DebugLog.print "Got back: '#{item}'\n"
       update_display(@server_wid.to_s, @map_wid.to_s, get_states())
     end
     Tk.after(1000, proc { gui_monitor } )
