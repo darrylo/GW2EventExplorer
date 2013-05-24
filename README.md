@@ -105,6 +105,10 @@ Known Issues
   but even this causes a slow process growth.  It's recommended that you
   restart this script at least once a day.
 
+* When the events are refreshed, the window is redrawn and the view
+  moved back to the top.  If you've scrolled down, you lose your
+  position.
+
 
 TODO
 ----

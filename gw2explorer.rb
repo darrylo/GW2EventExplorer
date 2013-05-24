@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 24 10:22:22 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 24 11:20:20 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental (Do Not Distribute)
@@ -51,7 +51,7 @@ load "gw2data.rb"
 class GW2EventExplorer
   include MonitorMixin
 
-  DEBUG = true
+  DEBUG = false
 
   DATABASE_FILE = "gw2events.sqlite"
   OPTIONS_FILE = "gw2explorer.cfg"

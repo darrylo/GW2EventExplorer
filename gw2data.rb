@@ -7,7 +7,7 @@
 #		it into a sqlite database
 # Author:       Darryl Okahata
 # Created:      Tue May 21 18:05:39 2013
-# Modified:     Fri May 24 10:10:29 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 24 11:05:00 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -303,12 +303,11 @@ module GW2
       @event_names = {}
       @map_names = {}
       @world_names = {}
+
+      # We always update metadata at startup
+      update_metadata
       load_metadata
-      if need_metadata then
-        GW2::DebugLog.print "Need metadata\n"
-        update_metadata
-        load_metadata
-      end
+
       @current_generation = get_current_generation
       @previous_generation = 0
       update_generations
