@@ -1,7 +1,7 @@
 #! /usr/bin/env ruby
 ###############################################################################
 #
-# File:         gw2explorer.rb
+# File:         gw2explorer.rbw
 # RCS:          $Header: $
 # Description:  GW2Explorer is a desktop application designed to browse
 #		Guild Wars 2 events.
@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 24 11:20:20 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 24 11:25:41 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental (Do Not Distribute)

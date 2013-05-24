@@ -3,7 +3,7 @@ GW2EventExplorer -- A desktop app for browsing Guild Wars 2 events
 
 Version: 0.1, May 24, 2013
 
-GW2Explorer.rb is a crude ruby script that allows you to browse Guild
+GW2Explorer.rbw is a crude ruby script that allows you to browse Guild
 Wars 2 events on various servers.  Currently, the functionality is
 fairly primitive, but this will be enhanced to include desktop,
 smartphone, and tablet event notifications.  Right now, you are limited
@@ -74,22 +74,28 @@ There are two ways to run this script:
 
 * Via the command line, like:
 
-    ruby gw2explorer.rb
+    rubyw gw2explorer.rbw
 
   Windows users should not directly run cmd.exe, but should instead get
   a command-line prompt via "Start->All Programs->Ruby 1.9.X ...->Start
   Command Prompt With Ruby".
 
-* If you have the appropriate file associations set, you can
-  double-click on "gw2explorer.rb" in your file manager.  (Example:
-  windows users should be able to just double-click on "gw2explorer.rb"
-  to start it -- but note that, since the file extension is ".rb" and
-  not ".rbw", an extra console window will still be opened.)
+  After running the command, nothing will happen for several seconds, as
+  the program has to contact anet and download an initial set of data.
+
+  Note that, since "rubyw" is used instead of "ruby", running the above
+  command will immediately return.  The program is running in the
+  background, and a window should appear after a moment.
+
+* If you have the appropriate file associations set, you can just
+  double-click on "gw2explorer.rbw" in your file manager.  (Example:
+  windows users should be able to just double-click on "gw2explorer.rbw"
+  to start it.)
 
 NOTE: while it is possible to convert this script into a windows .exe,
 there are no plans to do so.  This is because the resulting executable
 is often incorrectly flagged as a virus, trojan, or other malware, due
-to the ruby script to .exe conversion method used.
+to the ruby script to .exe conversion methods.
 
 
 Known Issues
