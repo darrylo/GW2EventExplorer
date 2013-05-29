@@ -7,7 +7,7 @@
 #		it into a sqlite database
 # Author:       Darryl Okahata
 # Created:      Tue May 21 18:05:39 2013
-# Modified:     Fri May 24 11:05:00 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Tue May 28 21:16:10 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -38,8 +38,8 @@ require 'uri'
 require 'json'
 require 'zlib'
 require 'monitor'
-
 require 'sqlite3'
+require 'csv'
 require 'pp'
 
 module GW2
@@ -158,6 +158,13 @@ module GW2
     return names
   end
 
+  def GW2.read_group_events_csv(file, event_array = {})
+    CSV.foreach(file) { |row|
+      event_array[row[0]] = :group
+    }
+    return event_array
+  end
+
   class DebugLog
 
     DEBUG_DEBUG = true
@@ -257,6 +264,10 @@ module GW2
         val = -val
       end
       return val
+    end
+
+    def EventItem.sort_list(data)
+      return data.sort { |a,b| EventItem.sorter(a,b) }
     end
 
     def initialize(world_id, map_id, event_id, state, generation)
@@ -572,56 +583,12 @@ module GW2
     def get_eventdata(world = nil, map = nil, event = nil, states = nil, all_events = false)
       check_eventdata_table
 
-#       selection = nil
-#       if not all_events then
-#         selection = append_selection(selection,
-#                                      "(generation == #{@current_generation})")
-#       end
-#       if world then
-#         selection = append_selection(selection,
-#                                      "(world == #{world})")
-#       end
-#       if map then
-#         selection = append_selection(selection,
-#                                      "(map == #{map})")
-#       end
-#       if event then
-#         selection = append_selection(selection,
-#                                      "(event_id == '#{event}')")
-#       end
-#       if states then
-#         if states.class == Array then
-#           if states.size > 0 then
-#             if selection.nil? then
-#               selection = "WHERE ("
-#             else
-#               selection << " AND ("
-#             end
-#             first = true
-#             states.each { |st|
-#               if not first then
-#                 selection << " OR "
-#               end
-#               if st.class == String then
-#                 st = GW2.state_to_int(st)
-#               end
-#               selection << "(state == #{st})"
-#               first = false
-#             }
-#             selection << ")"
-#           end
-#         else
-#           selection << "(state == #{states})"
-#         end
-#       end
-#       cmd = "SELECT world,map,event_id,state,generation FROM event_data INDEXED BY event_index #{selection};"
-
       worldspec = ""
       selection = ""
 
       if world then
         worldspec = "WHERE world = #{world}"
-        selection << " AND (event_data.world = #{world})"
+        #selection << " AND (event_data.world = #{world})"
       end
       if map then
         selection << " AND (event_data.map = #{map})"
@@ -675,7 +642,7 @@ ON event_data.generation = m.maxgeneration
         newitem = EventItem.new(world, map, event_id, state, generation)
         data << newitem
       }
-      data.sort! { |a,b| EventItem.sorter(a,b) }
+      #data.sort! { |a,b| EventItem.sorter(a,b) }
       return data
     end
 
@@ -691,7 +658,7 @@ ON event_data.generation = m.maxgeneration
     def vacuum
       @db.execute("VACUUM;")
     end
-  end
+  end	# class GW2Database
 
   class EventManager
     include MonitorMixin
@@ -783,28 +750,138 @@ ON event_data.generation = m.maxgeneration
       }
     end
 
-  end
+  end	# class EventManager
+
+  class EventMatcher
+    public
+
+    def initialize
+      @world = nil
+      @map = nil
+      @events = {}
+    end
+
+    def set_world(world)
+      @world = world.to_i
+    end
+
+    def set_map(map)
+      @map = map.to_i
+    end
+
+    def set_events(events, add = nil)
+      if events.class == Array then
+	if not add then
+	  @events = {}
+	end
+	events.each { |event|
+	  @events[event] = true
+	}
+      elsif events.class == Hash then
+	if add then
+	  events.each { |event|
+	    @events[event] = true
+	  }
+	else
+	  @events = events
+	end
+      elsif events.class == String then
+	if not add then
+	  @events = {}
+	end
+	@events[events] = true
+      elsif
+	raise "Huh? (#{events.class})"
+      end
+    end
+
+    def match(event)	# event is of type EventItem
+      if @events && @events[event.event_id] then
+	return true
+      end
+      if @world && @world != event.world_id then
+	return false
+      end
+      if @map && @map != event.map_id then
+	return false
+      end
+      return true
+    end
+
+    def filter_events(events)
+      data = []
+      events.each { |event|
+	if match(event) then
+	  data << event
+	end
+      }
+      return (data)
+    end
+    
+  end	# class EventMatcher
 
 end
 
 
 if $0 == __FILE__ then
+  ############################################################################
   # For testing.
-  if true
+  ############################################################################
+  if false then
     s = Time.now
-    d = GW2::GW2Database.new("d:/gw2events.sqlite")
+    d = GW2::GW2Database.new("gw2events.sqlite")
     d.get_last_update_time(2003)
     print "Time = #{(Time.now - s).to_s}\n"
     exit 0
   end
-  d = GW2::EventManager.new("d:/gw2events.sqlite")
+  if true then
+
+    #require 'profiler'
+
+    s = Time.now
+    m = GW2::EventMatcher.new
+
+    #Profiler__::start_profile
+
+    CSV.foreach("group_events.csv") { |row|
+      event = row[0]
+      m.set_events(event, true)
+    }
+    print "CSV load time = #{(Time.now - s).to_s}\n"
+
+    s1 = Time.now
+    d = GW2::EventManager.new("gw2events.sqlite")
+    data = []
+    results = d.filter_events(2003)
+    print "Event extraction time = #{(Time.now - s1).to_s}\n"
+    s1 = Time.now
+    results.each { |event|
+      if m.match(event) then
+	data << event
+      end
+    }
+    data = GW2::EventItem.sort_list(data)
+    print "Filtering time = #{(Time.now - s1).to_s}\n"
+
+
+    print "Total Time = #{(Time.now - s).to_s}\n"
+    #Profiler__::stop_profile
+    #Profiler__::print_profile(STDOUT)
+    #pp data
+    data.each { |event|
+      print "Name: #{event.name}\n"
+    }
+    exit 0
+  end
+  d = GW2::EventManager.new("gw2events.sqlite")
   s = Time.now
-  d.update_metadata
-  d.update_eventdata
+  #d.update_metadata
+  #d.update_eventdata
   #d.update_eventdata(2003)
   #data = d.filter_events(2003, 15, nil, [1,2])
+  data = d.filter_events(2003)
   #d.get_last_update_time(2003)
-  #d.dump
+  pp data
   print "Time = #{(Time.now - s).to_s}\n"
   #pp data.size
 end

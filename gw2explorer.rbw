@@ -11,10 +11,10 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 24 11:25:41 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Tue May 28 22:43:04 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
-# Status:       Experimental (Do Not Distribute)
+# Status:       Experimental
 #
 # (C) Copyright 2013, Darryl Okahata, all rights reserved.
 #
@@ -51,11 +51,13 @@ load "gw2data.rb"
 class GW2EventExplorer
   include MonitorMixin
 
-  DEBUG = false
+  DEBUG = true
+  DEBUG_TIMINGS = true
 
   DATABASE_FILE = "gw2events.sqlite"
   OPTIONS_FILE = "gw2explorer.cfg"
   DEBUGLOG_FILE = "gw2events-debug.log"
+  GROUP_EVENTS_CSV = "group_events.csv"
 
   MAP_ALL = "All"
   DEFAULT_WORLD = "Tarnished Coast"	# just a default
@@ -86,6 +88,7 @@ class GW2EventExplorer
       @options[:show_fail] = true
       @options[:show_warmup] = false
       @options[:show_preparation] = true
+      @options[:show_group_enents] = false
 
       @options[:update_interval] = DEFAULT_UPDATE_INTERVAL
 
@@ -120,7 +123,7 @@ class GW2EventExplorer
       @options[index] = value
     end
 
-  end
+  end	# class Options
 
   def get_states()
     states = []
@@ -168,6 +171,11 @@ class GW2EventExplorer
     else
       @options[:show_preparation] = true
     end
+    if @want_group_events.value.empty? then
+      @options[:show_group_events] = nil
+    else
+      @options[:show_group_events] = true
+    end
   end
 
   def get_states_from_options()
@@ -196,16 +204,25 @@ class GW2EventExplorer
     else
       @want_preparation.value = ""
     end
+    if @options[:show_group_events] then
+      @want_group_events.value = "1"
+    else
+      @want_group_events.value = ""
+    end
   end
 
-  def update_display(server, map, states)
-#     pp @options
-#     pp @want_active.value
-#     pp @want_success.value
-#     pp @want_fail.value
-#     pp @want_warmup.value
-#     pp @want_preparation.value
-#     pp get_states
+  def update_display_events
+    @display_events = {}
+    if @options[:show_group_events] then
+      @display_events = @special_events.select { |k,v| v == :group }
+    end
+  end
+
+  def is_group_event(event)
+    return (@special_events[event.event_id] == :group)
+  end
+
+  def update_display(server, map, states, display_events)
     @options[:current_world] = server
     @options[:current_map] = map
 
@@ -216,9 +233,11 @@ class GW2EventExplorer
         map_id = @data_manager.map_id_from_name(map)
       end
       if not world_id.nil? then
-        events = @data_manager.filter_events(world_id, map_id, nil, states)
-        #pp events[0]
-        #print events[0].world, "\n"
+	@event_matcher.set_map(map_id)
+	@event_matcher.set_events(display_events)
+        all_events = @data_manager.filter_events(world_id, nil, nil, states)
+	events = @event_matcher.filter_events(all_events)
+	events = GW2::EventItem.sort_list(events)
         update_event_display(events)
         @last_update_widget.value = @data_manager.get_last_update_time(world_id)
       else
@@ -291,6 +310,10 @@ class GW2EventExplorer
       state = event_item.state
       map_name = event_item.map
 
+      if is_group_event(event_item) then
+	event_name = "(G) " + event_name
+      end
+
       widget_state = "normal"
       if state == GW2::STATE_WARMUP then
         state = "Inactive"
@@ -352,15 +375,29 @@ class GW2EventExplorer
   def initialize(manager)
     super()	# needed to initialize MonitorMixin
 
+    @options = Options.new(OPTIONS_FILE)
+
     @updating = false
+    @last_request_time = nil
 
     @max_generations = 10
+
+    @special_events = {}
+    if File.exists?(GROUP_EVENTS_CSV) then
+      GW2.read_group_events_csv(GROUP_EVENTS_CSV, @special_events)
+    end
+
+    @event_matcher = GW2::EventMatcher.new
+#     if not @special_events.empty? then
+#       @event_matcher.set_events(@special_events)
+#     end
+
+    @display_events = {}
+    update_display_events
 
     @delwids = []
 
     @data_manager = manager
-
-    @options = Options.new(OPTIONS_FILE)
 
     @update_interval = @options[:update_interval] || DEFAULT_UPDATE_INTERVAL
     if @update_interval < 60
@@ -409,6 +446,7 @@ class GW2EventExplorer
     @want_fail = TkVariable.new
     @want_warmup = TkVariable.new
     @want_preparation = TkVariable.new
+    @want_group_events = TkVariable.new
 
     # rubytk doesn't like to access method variables directly:
     v_active = @want_active
@@ -416,6 +454,7 @@ class GW2EventExplorer
     v_fail = @want_fail
     v_warmup = @want_warmup
     v_preparation = @want_preparation
+    v_group_events = @want_group_events
 
     get_states_from_options()
 
@@ -424,28 +463,32 @@ class GW2EventExplorer
                :onvalue => 1, :offvalue => nil,
                :command => proc {
                  update_states_in_options()
-                 update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
                } )
     @box_success =
       view.add(:checkbutton, :label => "Success", :variable => v_success,
                :onvalue => 1, :offvalue => nil,
                :command => proc {
                  update_states_in_options()
-                 update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
                } )
     @box_fail =
       view.add(:checkbutton, :label => "Fail", :variable => v_fail,
                :onvalue => 1, :offvalue => nil,
                :command => proc {
                  update_states_in_options()
-                 update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
                } )
     @box_inactive =
       view.add(:checkbutton, :label => "Inactive", :variable => v_warmup,
                :onvalue => 1, :offvalue => nil,
                :command => proc {
                  update_states_in_options()
-                 update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
                } )
     @box_preparation =
       view.add(:checkbutton, :label => "Preparation", 
@@ -453,7 +496,18 @@ class GW2EventExplorer
                :onvalue => 1, :offvalue => nil,
                :command => proc {
                  update_states_in_options()
-                 update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
+               } )
+    @box_group_events =
+      view.add(:checkbutton, :label => "All Group Events", 
+               :variable => v_group_events,
+               :onvalue => 1, :offvalue => nil,
+               :command => proc {
+                 update_states_in_options()
+		 update_display_events
+                 update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+				@display_events)
                } )
 
     update_checkbox(@box_active, @options[:show_active])
@@ -461,9 +515,6 @@ class GW2EventExplorer
     update_checkbox(@box_fail, @options[:show_fail])
     update_checkbox(@box_inactive, @options[:show_warmup])
     update_checkbox(@box_preparation, @options[:show_preparation])
-
-    #pp v_active.nil?
-    #pp v_active.to_s
 
     ###########################################################################
     # Main app area
@@ -508,7 +559,8 @@ class GW2EventExplorer
     }
     wid.state(:readonly)
     wid.bind("<ComboboxSelected>") { 
-      update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+      update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+		     @display_events)
     }
     wid.grid :row => 0, :column => 1
 
@@ -532,7 +584,8 @@ class GW2EventExplorer
     }
     wid.state(:readonly)
     wid.bind("<ComboboxSelected>") {
-      update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+      update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+		     @display_events)
     }
     wid.grid :row => 0, :column => 4
 
@@ -595,7 +648,8 @@ class GW2EventExplorer
 
     ###########################################################################
 
-    update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+    update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+		   @display_events)
 
     ###########################################################################
 
@@ -670,7 +724,6 @@ class GW2EventExplorer
   def gui_monitor
     world_id = nil
     last_update_time = nil
-    last_request_time = nil
     @data_manager.db_synchronize {
       world_id = @data_manager.world_id_from_name(@server_wid.to_s)
       last_update_time = @data_manager.get_last_update_time(world_id)
@@ -678,21 +731,29 @@ class GW2EventExplorer
     #print "last update time = #{last_update_time} (now: #{Time.now})\n"
     current_time = Time.now
     if (current_time - last_update_time).to_f > @update_interval then
-      if last_request_time.nil? ||
-         ((current_time - last_request_time) >= 60) then
+      if @last_request_time.nil? ||
+         ((current_time - @last_request_time) >= 60) then
         if not @updating then
-          GW2::DebugLog.print "sending update request for '#{@server_wid.to_s}' (#{world_id})\n"
+          @last_request_time = current_time
+          GW2::DebugLog.print "Sending update request for '#{@server_wid.to_s}' (#{world_id}) at '#{@last_request_time}'\n"
           @task_queue.push(world_id)
-          last_request_time = current_time
         end
       else
-        GW2::DebugLog.print "***** Not sending request (#{(current_time - last_request_time).to_f} < 60)\n"
+        GW2::DebugLog.print "***** Not sending request (#{(current_time - @last_request_time).to_f} < 60)\n"
       end
     end
     if not @gui_queue.empty? then
       item = @gui_queue.pop
       GW2::DebugLog.print "Got back: '#{item}'\n"
-      update_display(@server_wid.to_s, @map_wid.to_s, get_states())
+      update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+		     @display_events)
+      if DEBUG_TIMINGS then
+	if @last_request_time then
+	  GW2::DebugLog.print "Update time = #{(Time.now - @last_request_time).to_s}\n"
+	else
+	  GW2::DebugLog.print "last_request_time is nil??\n"
+	end
+      end
     end
     Tk.after(1000, proc { gui_monitor } )
   end
