@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Tue May 28 23:52:14 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Thu May 30 01:39:44 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -48,11 +48,36 @@ require 'pp'
 load "gw2data.rb"
 
 
+###############################################################################
+#
+# Notification sending
+#
+###############################################################################
+
+GROWL_APP_NAME = "GW2events"
+GROWL_NOTIFICATION_TYPE = "Meta events"
+
+
+def setup_notifications
+  $growl = Growl.new("localhost", GROWL_APP_NAME)
+  $growl.add_notification(GROWL_NOTIFICATION_TYPE)
+end
+
+
+def send_notification (title, msg)
+  $growl.notify(GROWL_NOTIFICATION_TYPE, title, msg)
+end
+
+
+###############################################################################
+# Main GUI class
+###############################################################################
+
 class GW2EventExplorer
   include MonitorMixin
 
-  DEBUG = false
-  DEBUG_TIMINGS = false
+  DEBUG = true
+  DEBUG_TIMINGS = true
 
   DATABASE_FILE = "gw2events.sqlite"
   OPTIONS_FILE = "gw2explorer.cfg"
@@ -63,10 +88,18 @@ class GW2EventExplorer
   DEFAULT_WORLD = "Tarnished Coast"	# just a default
   DEFAULT_MAP = MAP_ALL
 
-  DEFAULT_UPDATE_INTERVAL = 300
+  NO_NOTIFY_VALUE = "None"
+  ANY_NOTIFY_VALUE = "Any"
+  ACTIVE_PREP_NOTIFY_VALUE = "Active/Prep"
+
+  DEFAULT_UPDATE_INTERVAL = 60
+  ABSOLUTE_MIN_UPDATE_TIME = 45
+
+  # How much data to keep, in hours.
+  MAX_KEEP_TIME =  1
 
   # Vacuum the database every VACUUM_ITERATIONS.
-  VACUUM_ITERATIONS = 10
+  VACUUM_ITERATIONS = 30
 
   DEFAULT_BACKGROUND_COLOR = "gray94"
   HEADER_COLOR = "#5ED9DD"
@@ -76,21 +109,23 @@ class GW2EventExplorer
   FIELD_WIDTH_STATE = 10
   FIELD_WIDTH_DESCRIPTION = 100
   FIELD_WIDTH_SERVER = 20
+  FIELD_WIDTH_NOTIFY = 10
+  FIELD_WIDTH_LAST_CHANGED = 20
 
   class Options
     def initialize(file = nil)
       @options = {}
       @options[:current_world] = DEFAULT_WORLD
       @options[:current_map] = DEFAULT_MAP
-
       @options[:show_active] = true
       @options[:show_success] = true
       @options[:show_fail] = true
       @options[:show_warmup] = false
       @options[:show_preparation] = true
       @options[:show_group_enents] = false
-
       @options[:update_interval] = DEFAULT_UPDATE_INTERVAL
+      @options[:time24] = false
+      @options[:notify_events] = {}
 
       if file and File.exists?(file) then
         load(file)
@@ -222,6 +257,67 @@ class GW2EventExplorer
     return (@special_events[event.event_id] == :group)
   end
 
+  def rebuild_notify_events()
+    @notify_events = {}
+    if @events_to_display then
+      event_index = 0
+      @events_to_display.each { |event|
+	var = @notify_event_vars[event_index]
+	if var then
+	  val = var.value
+	  if val != NO_NOTIFY_VALUE then
+	    if val == ANY_NOTIFY_VALUE then
+	      @notify_events[event.event_id] = :any
+	    elsif val == ACTIVE_PREP_NOTIFY_VALUE then
+	      @notify_events[event.event_id] = :active_prep
+	    else
+	      @notify_events[event.event_id] = GW2.state_to_int(val)
+	    end
+	  end
+	end
+	event_index = event_index + 1
+      }
+    end
+    @options[:notify_events] = @notify_events
+  end
+
+#   def update_and_look_for_changes
+#     changes = []
+#     if (@current_world_id == @previous_world_id) and 
+# 	not (@previous_world_events.nil? ||
+# 	     @previous_world_events.empty?) then
+#       @world_events.each { |event|
+# 	id = event.event_id
+# 	previous_state = @previous_world_index[id]
+# 	if previous_state then
+# 	  if event.state_num != previous_state.state_num then
+# 	    # keep current event.change_time
+# 	    changes << event
+# 	  else
+# 	    # reset event.change_time back to the previous state
+# 	    event.change_time = previous_state.change_time
+# 	  end
+# 	end
+#       }
+#     end
+#     return changes
+#   end
+
+  def update_world_events(world_id)
+    if @current_world_id == world_id then
+      if !@first_update then
+	@check_notify = true
+      end
+      @first_update = false
+    else
+      @first_update = true
+    end
+
+    @current_world_id = world_id
+
+    @world_events = @data_manager.filter_events(world_id)
+  end
+
   def update_display(server, map, states, display_events)
     @options[:current_world] = server
     @options[:current_map] = map
@@ -235,10 +331,32 @@ class GW2EventExplorer
       if not world_id.nil? then
 	@event_matcher.set_map(map_id)
 	@event_matcher.set_events(display_events)
-        all_events = @data_manager.filter_events(world_id, nil, nil, states)
-	events = @event_matcher.filter_events(all_events)
-	events = GW2::EventItem.sort_list(events)
-        update_event_display(events)
+	@event_matcher.set_types(states)
+# 	@previous_world_id = @current_world_id
+# 	@previous_world_events = @world_events
+# 	@previous_world_index = @world_index
+
+	if world_id != @current_world_id then
+	  update_world_events(world_id)
+	end
+
+	#print "Number of world events = #{@world_events.size}\n"
+
+	#File.open("data.dat", "w") { |f| YAML.dump(@world_events, f) }
+
+# 	@world_index = {}
+# 	@world_events.each { |event|
+# 	  @world_index[event.event_id] = event
+# 	}
+
+# 	changes = update_and_look_for_changes
+# 	#pp changes
+
+	events = @event_matcher.filter_events(@world_events)
+	@events_to_display = GW2::EventItem.sort_list(events)
+	#print "Number of display events = #{@events_to_display.size}\n"
+
+        update_event_display(@events_to_display)
         @last_update_widget.value = @data_manager.get_last_update_time(world_id)
       else
         raise "Wat? (#{server})"
@@ -264,6 +382,10 @@ class GW2EventExplorer
     twid.yscrollbar(vert)
     twid.xscrollbar(horiz)
 
+    twid.grid :row => 0, :column => 0, :sticky => "nsew"
+    vert.grid :row => 0, :column => 1, :sticky => "nsew"
+    horiz.grid :row => 1, :column => 0, :sticky => "nsew"
+
     TkGrid.rowconfigure(frame, 0, :weight => 1)
     TkGrid.columnconfigure(frame, 0, :weight => 1)
     TkGrid.columnconfigure(frame, 1, :weight => 0)
@@ -274,37 +396,54 @@ class GW2EventExplorer
     TkGrid.rowconfigure(vert, 0, :weight => 1)
     TkGrid.columnconfigure(vert, 1, :weight => 1)
 
-    twid.grid :row => 0, :column => 0, :sticky => "nsew"
-    vert.grid :row => 0, :column => 1, :sticky => "nsew"
-    horiz.grid :row => 1, :column => 0, :sticky => "nsew"
-
-    [frame, twid]
+    [frame, twid, vert]
   end
 
   def update_event_display(event_data)
+    notify_states = [ 
+      NO_NOTIFY_VALUE,
+      GW2::STATE_ACTIVE,
+      GW2::STATE_SUCCESS,
+      GW2::STATE_FAIL,
+      GW2::STATE_WARMUP,
+      GW2::STATE_PREPARATION,
+      ACTIVE_PREP_NOTIFY_VALUE,
+      ANY_NOTIFY_VALUE
+    ]
+
+    vert_scroll_pos = nil
     if @event_frame then
       @event_frame.destroy
       @event_frame = nil
       @event_widget = nil
+#       if @event_vscroll then
+# 	pp @event_vscroll.public_methods.sort
+# 	vert_scroll_pos = @event_vscroll.get()
+#       end
+      @event_vscroll = nil
       @delwids.each { |wid|
         wid.destroy
       }
     end
     @delwids = []
 
-    @event_frame, @event_widget =
+    @event_frame, @event_widget, @event_vscroll =
       scrolledWidget(@app, 
-                     :width => 110,
+                     :width => 130,
                      :height => 30,
                      :background => DEFAULT_BACKGROUND_COLOR,
                      :wrap=>:none, :undo => false)
     @event_frame.grid :row => 2, :column => 0, :sticky => "nsew"
+    TkGrid.rowconfigure( @app, 2, :weight => 1 )
+    TkGrid.columnconfigure( @event_frame, 0, :weight => 1 )
+    TkGrid.columnconfigure( @app, 0, :weight => 1 )
 
     @event_widget.grid :sticky => "nsew"
 
     @root.update
 
     # @event_widget.delete("1.0", "end")
+    event_index = 0
     event_data.each { |event_item|
       event_name = event_item.name
       state = event_item.state
@@ -314,6 +453,7 @@ class GW2EventExplorer
 	event_name = "(G) " + event_name
       end
 
+      #########################################################################
       widget_state = "normal"
       if state == GW2::STATE_WARMUP then
         state = "Inactive"
@@ -337,6 +477,7 @@ class GW2EventExplorer
       newwin = TkTextWindow.new(@event_widget, 'end', :window => label)
       @delwids << newwin << label
 
+      #########################################################################
       label = Tk::Tile::Label.new(@event_widget) {
         text event_name
         width FIELD_WIDTH_DESCRIPTION
@@ -346,6 +487,7 @@ class GW2EventExplorer
       newwin = TkTextWindow.new(@event_widget, 'end', :window => label)
       @delwids << newwin << label
 
+      #########################################################################
       label = Tk::Tile::Label.new(@event_widget) {
         text map_name
         width FIELD_WIDTH_SERVER
@@ -355,9 +497,68 @@ class GW2EventExplorer
       newwin = TkTextWindow.new(@event_widget, 'end', :window => label)
       @delwids << newwin << label
 
+      #########################################################################
+      # Naaaasty ugly kludge.  Use recycled variables to prevent memory leak.
+      # We hates it.
+      # Basically, we assume that the display order is fixed, and so we use
+      # the display order as an index into the variable array.
+      default_state = NO_NOTIFY_VALUE
+      state = @notify_events[event_item.event_id]
+      if state then
+	if state == :any then
+	  default_state = ANY_NOTIFY_VALUE
+	elsif state == :active_prep then
+	  default_state = ACTIVE_PREP_NOTIFY_VALUE
+	else
+	  default_state = GW2.int_to_state(state)
+	end
+      end
+      notify_var = @notify_event_vars[event_index]
+      if notify_var.nil? then
+	notify_var = TkVariable.new(default_state)
+	@notify_event_vars[event_index] = notify_var
+      else
+	notify_var.value = default_state
+      end
+      notify_wid = Tk::Tile::Combobox.new(@event_widget) {
+        textvariable notify_var
+        width FIELD_WIDTH_NOTIFY
+        background bgcolor
+	values notify_states
+      }
+      notify_wid.state(:readonly)
+      notify_wid.bind("<ComboboxSelected>") { 
+	rebuild_notify_events
+        #update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+      	#	       @display_events)
+      }
+      newwin = TkTextWindow.new(@event_widget, 'end', :window => notify_wid)
+      @delwids << newwin << notify_wid
+
+      #########################################################################
+      if @options[:time24] then
+	last_changed = "  " + event_item.last_change_time.strftime("%H:%M (%a)")
+      else
+	last_changed = "  " + event_item.last_change_time.strftime("%I:%M %P (%a)")
+      end
+      label = Tk::Tile::Label.new(@event_widget) {
+        text last_changed
+	width FIELD_WIDTH_LAST_CHANGED
+        background bgcolor
+        state widget_state
+      }
+      newwin = TkTextWindow.new(@event_widget, 'end', :window => label)
+      @delwids << newwin << label
+
+      #########################################################################
       @event_widget.insert('end', "\n")
+
+      event_index = event_index + 1
     }
     @event_widget.state(:disabled)
+    if vert_scroll_pos then
+      @event_vscroll.set vert_scroll_pos
+    end
   end
 
   def save
@@ -366,21 +567,37 @@ class GW2EventExplorer
 
   def terminate
     save
-    while @updatine
+    while @updating
       sleep(1)
     end
     exit
   end
 
+  def max_generations
+    return (MAX_KEEP_TIME * 3600) / @update_interval
+  end
+
   def initialize(manager)
     super()	# needed to initialize MonitorMixin
 
-    @options = Options.new(OPTIONS_FILE)
-
+    @notify_event_vars = []
+    @notify_events = {}			# irrelevant, because of below
     @updating = false
-    @last_request_time = nil
+    @last_request_time = {}
+    @current_world_id = nil
+    @world_events = nil
+    @check_notify = false
+#     @world_index = nil
+#     @previous_world_events = nil
+#     @previous_world_index = nil
+    @events_to_display = nil
 
-    @max_generations = 10
+    @event_frame = nil
+    @event_widget = nil
+    @event_vscroll = nil
+
+    @options = Options.new(OPTIONS_FILE)
+    @notify_events = @options[:notify_events]
 
     @special_events = {}
     if File.exists?(GROUP_EVENTS_CSV) then
@@ -400,9 +617,9 @@ class GW2EventExplorer
     @data_manager = manager
 
     @update_interval = @options[:update_interval] || DEFAULT_UPDATE_INTERVAL
-    if @update_interval < 60
+    if @update_interval < ABSOLUTE_MIN_UPDATE_TIME
       # No way do we allow anything smaller than this
-      @update_interval = 60	# This is the absolute limit
+      @update_interval = ABSOLUTE_MIN_UPDATE_TIME
     end
 
     @worlds = @data_manager.get_world_names()
@@ -532,9 +749,9 @@ class GW2EventExplorer
       borderwidth 5
       #relief "sunken"
     }
-    TkGrid.rowconfigure( @options_frame, 0, :weight => 0 )
-    TkGrid.columnconfigure( @options_frame, 0, :weight => 0 )
     @options_frame.grid :row => 0, :column => 0, :sticky => "nsew"
+    TkGrid.rowconfigure( @app, 0, :weight => 0 )
+    TkGrid.columnconfigure( @options_frame, 0, :weight => 0 )
 
     bold_font = TkFont.new :family => 'Calibri', :size => 11, :weight => 'bold'
 
@@ -596,6 +813,8 @@ class GW2EventExplorer
       background HEADER_COLOR
     }
     @header_frame.grid :row => 1, :column => 0, :sticky => "nsew"
+    TkGrid.rowconfigure( @app, 1, :weight => 0 )
+    TkGrid.columnconfigure( @header_frame, 0, :weight => 0 )
 
 
     label = Tk::Tile::Label.new(@header_frame) {
@@ -621,6 +840,22 @@ class GW2EventExplorer
       background HEADER_COLOR
     }
     label.grid :row => 0, :column => 2, :sticky => "nsew"
+
+    label = Tk::Tile::Label.new(@header_frame) {
+      text "Notify"
+      anchor "w"
+      width FIELD_WIDTH_NOTIFY + 4
+      background HEADER_COLOR
+    }
+    label.grid :row => 0, :column => 3, :sticky => "nsew"
+
+    label = Tk::Tile::Label.new(@header_frame) {
+      text "Last Changed"
+      anchor "w"
+      width FIELD_WIDTH_LAST_CHANGED
+      background HEADER_COLOR
+    }
+    label.grid :row => 0, :column => 4, :sticky => "nsew"
 
 
     ###########################################################################
@@ -676,8 +911,6 @@ class GW2EventExplorer
       GW2::DebugLog.print "Update world '#{world}' (#{world_id})\n"
       @data_manager.update_eventdata(world_id)
     }
-
-    return true
   end
 
   def thread_do_update
@@ -688,24 +921,59 @@ class GW2EventExplorer
         begin
           GW2::DebugLog.print "Update request for world id '#{world_id}'\n"
           @updating = true
-          if process_data_update(world_id) then
-            @gui_queue.push("update")
-            update_count = update_count + 1
-            @data_manager.db_synchronize {
-              g = @data_manager.get_update_generations(world_id)
-              if g.size > @max_generations then
-                cutoff = g[@max_generations]
-                GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
-                @data_manager.delete_old_generations(cutoff)
-                if update_count % VACUUM_ITERATIONS == 0 then
-                  s = Time.now
-                  GW2::DebugLog.print "Vacuuming ...\n"
-                  @data_manager.vacuum
-                  GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
-                end
-              end
-            }
-          end
+
+          process_data_update(world_id)
+	  update_world_events(world_id)
+
+	  @gui_queue.push("update")
+	  update_count = update_count + 1
+	  @data_manager.db_synchronize {
+	    g = @data_manager.get_update_generations(world_id)
+	    if g.size > max_generations then
+	      cutoff = g[max_generations]
+	      GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
+	      @data_manager.delete_old_generations(cutoff)
+
+	      # We only do vacuum checks if we delete
+	      if update_count % VACUUM_ITERATIONS == 0 then
+		s = Time.now
+		GW2::DebugLog.print "Vacuuming ...\n"
+		@data_manager.vacuum
+		GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
+	      end
+	    end
+	  }
+	  if @check_notify then
+	    GW2::DebugLog.print "Checking notify\n"
+	    if @world_events then
+	      @world_events.each { |event|
+		notify_type = @notify_events[event.event_id]
+		if notify_type then
+		  #print "Notify data exists for event \"#{event.name}\" (#{event.event_id})\n"
+		  if (event.update_time - event.last_change_time).abs < 1 then
+		    do_notify = false
+		    if notify_type == :any then
+		      do_notify = true
+		    elsif notify_type == :active_prep then
+		      if event.state_num == GW2::STATE_ACTIVE_NUM ||
+			  event.state_num == GW2::STATE_PREPARATION_NUM then
+			do_notify = true
+		      end
+		    elsif notify_type.is_a?(Fixnum) &&
+			event.state_num == notify_type then
+		      do_notify = true
+		    end
+		    if do_notify then
+		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} at time '#{event.last_change_time}' (#{event.update_time})\n"
+		    end
+		  end
+		end
+	      }
+	      @check_notify = false
+	    else
+	      GW2::DebugLog.print "NOT checking notify\n"
+	    end
+	  end
         ensure
           @updating = false
         end
@@ -731,15 +999,15 @@ class GW2EventExplorer
     #print "last update time = #{last_update_time} (now: #{Time.now})\n"
     current_time = Time.now
     if (current_time - last_update_time).to_f > @update_interval then
-      if @last_request_time.nil? ||
-         ((current_time - @last_request_time) >= 60) then
+      if @last_request_time[world_id].nil? ||
+         ((current_time - @last_request_time[world_id]) >= ABSOLUTE_MIN_UPDATE_TIME) then
         if not @updating then
-          @last_request_time = current_time
-          GW2::DebugLog.print "Sending update request for '#{@server_wid.to_s}' (#{world_id}) at '#{@last_request_time}'\n"
+          @last_request_time[world_id] = current_time
+          GW2::DebugLog.print "Sending update request for '#{@server_wid.to_s}' (#{world_id}) at '#{@last_request_time[world_id]}'\n"
           @task_queue.push(world_id)
         end
       else
-        GW2::DebugLog.print "***** Not sending request (#{(current_time - @last_request_time).to_f} < 60)\n"
+        GW2::DebugLog.print "***** Not sending request (#{(current_time - @last_request_time[world_id]).to_f} < #{ABSOLUTE_MIN_UPDATE_TIME})\n"
       end
     end
     if not @gui_queue.empty? then
@@ -748,8 +1016,8 @@ class GW2EventExplorer
       update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
 		     @display_events)
       if DEBUG_TIMINGS then
-	if @last_request_time then
-	  GW2::DebugLog.print "Update time = #{(Time.now - @last_request_time).to_s}\n"
+	if @last_request_time[world_id] then
+	  GW2::DebugLog.print "Update time = #{(Time.now - @last_request_time[world_id]).to_s}\n"
 	else
 	  GW2::DebugLog.print "last_request_time is nil??\n"
 	end
@@ -758,6 +1026,14 @@ class GW2EventExplorer
     Tk.after(1000, proc { gui_monitor } )
   end
 
+end
+
+
+def error_msg_popup(title, msg)
+  msgBox = Tk.messageBox('type'    => "ok",
+			 'icon'    => "error",
+			 'title'   => title,
+			 'message' => msg)
 end
 
 
