@@ -1,0 +1,25 @@
+2013-05-31    <darrylo@fake.domain>
+
+	* Event update time reduced to every 60 seconds.  This is both a
+	  blessing and a curse, as the poor ruby threading results in the
+	  GUI locking up for several seconds when an update occurs.  Also,
+	  because the scroll window is not saved/restored when updates
+	  occur, you can easily lose your viewing position.
+
+	* A list of events and their IDs can be found in "event_list.csv".
+	  Note that this list may not be complete, and that, yes, anet
+	  really does have an empty/blank name associated with an event
+	  ID.
+
+	* Added support for marking of "group events".  A group event has
+	  a "(G)" prepended to its event name/description.  Group events
+	  are stored/listed by evend id in a simple .csv file named,
+	  "group_events.csv", for easy editing.
+
+	  Thanks to Tiscan.8345, obtained via:
+
+	  https://forum-en.guildwars2.com/forum/community/api/List-of-all-group-events
+
+2013-05-24    <darrylo@fake.domain>
+
+	* Version 0.1 released

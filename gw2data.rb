@@ -7,7 +7,7 @@
 #		it into a sqlite database
 # Author:       Darryl Okahata
 # Created:      Tue May 21 18:05:39 2013
-# Modified:     Thu May 30 01:00:28 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 31 04:23:22 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -44,7 +44,7 @@ require 'pp'
 
 module GW2
 
-  USER_AGENT = "GW2 Event Explorer 0.1 " + RUBY_PLATFORM
+  USER_AGENT = "GW2 Event Explorer 0.2 " + RUBY_PLATFORM
 
   STATE_ACTIVE = "Active"
   STATE_ACTIVE_NUM = 1
@@ -170,6 +170,10 @@ module GW2
     return event_array
   end
 
+
+  #############################################################################
+  #############################################################################
+
   class DebugLog
 
     DEBUG_DEBUG = true
@@ -235,7 +239,11 @@ module GW2
         }
       end
     end
-  end
+  end		# DebugLog
+
+
+  #############################################################################
+  #############################################################################
 
   class EventItem
     attr_reader   :world_id, :map_id, :event_id, :generation, :last_changed
@@ -294,8 +302,12 @@ module GW2
       return @@map_names[@map_id] || "<UNKNOWN MAP>"
     end
 
+    def name_raw
+      return @@event_names[@event_id]
+    end
+
     def name
-      return @@event_names[@event_id] || "<UNKNOWN EVENT>"
+      return name_raw || "<UNKNOWN EVENT>"
     end
 
     def state_num
@@ -316,7 +328,11 @@ module GW2
     def last_change_time
       return Time.at(@last_changed)
     end
-  end
+  end		# EventItem
+
+
+  #############################################################################
+  #############################################################################
 
   class EventsSnapshot
     attr_reader		:update_time
@@ -362,7 +378,11 @@ module GW2
       }
       return events
     end
-  end
+  end		# EventsSnapshot
+
+
+  #############################################################################
+  #############################################################################
 
   class GW2Database
 
@@ -402,19 +422,41 @@ module GW2
     end
 
     def upgrade_db(current_db_ver)
-      if current_db_ver < 1 then
-	cmd = "ALTER TABLE event_data ADD COLUMN last_changed REAL DEFAULT 0;"
-	@db.execute(cmd)
-      end
-      set_version(CURRENT_DATABASE_VERSION)
+      @db.transaction {
+	if current_db_ver < 1 then
+	  cmd = "ALTER TABLE event_data ADD COLUMN last_changed REAL DEFAULT 0;"
+	  @db.execute(cmd)
+	end
+	set_version(CURRENT_DATABASE_VERSION)
+      }
+    end
+
+    def set_event_logging(logging)
+      @event_logging = logging
     end
 
     def initialize(filename, lang = nil)
       @lang = lang || ""
 
+      @event_logging = false
+
+      db_timeout = 60 * 1000	# In milliseconds
+      db_retry = 500		# In milliseconds
       @db = SQLite3::Database.new(filename)
+      @db.busy_timeout(db_retry)
+      @db.busy_handler() { |data, retries|
+	return (retries >= (db_timeout / db_retry))
+      }
 
       tables = get_tables()
+      @db.transaction {
+	check_generation_table
+	check_eventdata_table
+	check_metadata_table("world_names", true)
+	check_metadata_table("map_names", true)
+	check_metadata_table("event_names")
+      }
+
       if tables.empty? then
 	set_version(CURRENT_DATABASE_VERSION)
       else
@@ -459,7 +501,6 @@ module GW2
     end
 
     def update_metadata_table(data, table_name, keys_are_integer = false)
-      check_metadata_table(table_name, keys_are_integer)
       @db.transaction {
         data.each { |id, name|
           if keys_are_integer then
@@ -473,7 +514,6 @@ module GW2
     end
 
     def load_a_metadata_table(table_name, keys_are_integer = false)
-      check_metadata_table(table_name, keys_are_integer)
       result = {}
       cmd = "SELECT id,name FROM #{table_name};"
       data = @db.execute(cmd)
@@ -490,7 +530,6 @@ module GW2
     end
 
     def update_generations
-      check_generation_table
       @generations = {}
       cmd = "SELECT generation,update_time FROM generation_data;"
       data = @db.execute(cmd)
@@ -514,10 +553,15 @@ module GW2
       EventItem.set_metadata(@event_names, @map_names, @world_names)
     end
 
-    def update_metadata
-      GW2::DebugLog.print "Updating metadata from anet\n"
+    def update_event_names
       @event_names = GW2.get_names_id_mapping("https://api.guildwars2.com/v1/event_names.json" + @lang)
       update_metadata_table(@event_names, "event_names")
+    end
+
+    def update_metadata
+      GW2::DebugLog.print "Updating metadata from anet\n"
+
+      update_event_names
 
       @map_names = GW2.get_names_id_mapping("https://api.guildwars2.com/v1/map_names.json" + @lang)
       update_metadata_table(@map_names, "map_names", true)
@@ -539,7 +583,6 @@ module GW2
     end
 
     def get_current_generation
-      check_generation_table
       cmd = "SELECT generation FROM generation_data ORDER BY generation DESC LIMIT 1;"
       data = @db.execute(cmd)
       if data and data.length > 0 then
@@ -552,8 +595,7 @@ module GW2
 
     def update_eventdata(world = nil)
       GW2::DebugLog.print "update_eventdata(#{world})\n"
-      #snapshot = nil
-      #events = []
+      update_log = false
       append = ""
       update_time = Time.now
       if world then
@@ -584,11 +626,10 @@ module GW2
         if data.empty? then
           GW2::DebugLog.print "***** EMPTY DATA RECEIVED\n"
         end
-        check_eventdata_table
-        check_generation_table
         @previous_generation = @current_generation
         @current_generation = @current_generation + 1
 	log_updated = false
+	s = Time.now
         @db.transaction {
           data['events'].each { |item|
             world = item['world_id'].to_i
@@ -597,7 +638,9 @@ module GW2
             state = GW2.state_to_int(item['state'])
 
 	    last_changed = update_time.to_f
-	    update_log = true
+	    if @event_logging then
+	      update_log = true
+	    end
 	    if previous_snapshot then
 	      previous_event = previous_snapshot.event(event_id, world)
 
@@ -642,6 +685,7 @@ module GW2
 	  #snapshot = EventsSnapshot.new(events, update_time)
         }
         # @db.execute("VACUUM;")
+	GW2::DebugLog.print "Transaction took #{(Time.now - s).to_s} sec\n"
       else
         GW2::DebugLog.print "***** NO DATA RECEIVED\n"
       end
@@ -684,6 +728,10 @@ module GW2
       return @event_names[id]
     end
 
+    def event_ids
+      return @event_names.keys
+    end
+
     def get_world_names()
       return @world_names.values.sort
     end
@@ -715,7 +763,6 @@ module GW2
 	  (world.is_a?(Fixnum) && (world <= 0)) then
 	raise "Huh?"
       end
-      check_eventdata_table()
       generations = []
       limit_cmd = ""
       if limit then
@@ -754,7 +801,6 @@ module GW2
     end
 
     def get_last_update_generation(world)
-      check_eventdata_table()
       cmd = "SELECT DISTINCT generation FROM event_data WHERE world = #{world} ORDER BY generation DESC LIMIT 1;"
       #pp cmd
       data = @db.execute(cmd)
@@ -783,7 +829,7 @@ module GW2
     end
 
     def get_eventdata(world = nil, map = nil, event = nil, states = nil)
-      check_eventdata_table
+      s = Time.now
 
       worldspec = ""
       selection = ""
@@ -846,7 +892,7 @@ ON event_data.generation = m.maxgeneration
 				last_changed)
         data << newitem
       }
-      #data.sort! { |a,b| EventItem.sorter(a,b) }
+      GW2::DebugLog.print "get_eventdata() took #{(Time.now - s).to_s} sec\n"
       return data
     end
 
@@ -863,6 +909,24 @@ ON event_data.generation = m.maxgeneration
       @db.execute("VACUUM;")
     end
 
+    def get_log_data
+      data = []
+      cmd = "SELECT world,map,event_id,state,last_changed FROM event_log_data;"
+      results = @db.execute(cmd)
+      if results then
+	results.each { |column|
+	  world = column[0]
+	  map = column[1]
+	  event_id = column[2]
+	  state = column[3]
+	  last_changed = column[4]
+
+	  data << EventItem.new(world, map, event_id, state, 0, last_changed)
+	}
+      end
+      return data
+    end
+
     def dump_events_csv(stream = nil)
       if stream.nil? then
 	stream = STDOUT
@@ -873,6 +937,10 @@ ON event_data.generation = m.maxgeneration
     end
   end	# class GW2Database
 
+
+  #############################################################################
+  #############################################################################
+
   class EventManager
     include MonitorMixin
 
@@ -882,13 +950,16 @@ ON event_data.generation = m.maxgeneration
     ##########################################################################
     public
 
-    def initialize(database_filename)
+    def initialize(database_filename, enable_logging = false)
       super()	# needed to initialize MonitorMixin
       @lang = "?lang=fr"
       @lang = "?lang=de"
       @lang = ""
 
       @database = GW2Database.new(database_filename, @lang)
+      if enable_logging then
+	@database.set_event_logging(true)
+      end
     end
 
     def db_synchronize
@@ -964,6 +1035,10 @@ ON event_data.generation = m.maxgeneration
     end
 
   end	# class EventManager
+
+
+  #############################################################################
+  #############################################################################
 
   class EventMatcher
     public
@@ -1052,7 +1127,7 @@ ON event_data.generation = m.maxgeneration
     
   end	# class EventMatcher
 
-end
+end	# End of module
 
 
 if $0 == __FILE__ then
@@ -1118,7 +1193,7 @@ if $0 == __FILE__ then
     }
     exit 0
   end
-  if true then
+  if false then
     d = GW2::EventManager.new("gw2events.sqlite")
     s = Time.now
     #d.update_metadata
@@ -1130,5 +1205,14 @@ if $0 == __FILE__ then
     #pp data
     print "Time = #{(Time.now - s).to_s}\n"
     #pp data.size
+  end
+  if true then
+    d = GW2::GW2Database.new("gw2events.sqlite")
+    data = d.get_log_data
+    if data and not data.empty? then
+      data.each { |event|
+	print "#{event.name} in #{event.map}, #{event.state} at #{event.last_change_time} (#{event.event_id})\n"
+      }
+    end
   end
 end

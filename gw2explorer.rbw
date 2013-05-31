@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Thu May 30 01:39:44 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 31 03:54:51 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -49,27 +49,6 @@ load "gw2data.rb"
 
 
 ###############################################################################
-#
-# Notification sending
-#
-###############################################################################
-
-GROWL_APP_NAME = "GW2events"
-GROWL_NOTIFICATION_TYPE = "Meta events"
-
-
-def setup_notifications
-  $growl = Growl.new("localhost", GROWL_APP_NAME)
-  $growl.add_notification(GROWL_NOTIFICATION_TYPE)
-end
-
-
-def send_notification (title, msg)
-  $growl.notify(GROWL_NOTIFICATION_TYPE, title, msg)
-end
-
-
-###############################################################################
 # Main GUI class
 ###############################################################################
 
@@ -99,7 +78,7 @@ class GW2EventExplorer
   MAX_KEEP_TIME =  1
 
   # Vacuum the database every VACUUM_ITERATIONS.
-  VACUUM_ITERATIONS = 30
+  VACUUM_ITERATIONS = 10
 
   DEFAULT_BACKGROUND_COLOR = "gray94"
   HEADER_COLOR = "#5ED9DD"
@@ -111,6 +90,61 @@ class GW2EventExplorer
   FIELD_WIDTH_SERVER = 20
   FIELD_WIDTH_NOTIFY = 10
   FIELD_WIDTH_LAST_CHANGED = 20
+
+  #############################################################################
+  #
+  # Notification sending class
+  #
+  #############################################################################
+
+  class Notifier
+    private
+
+    GROWL_APP_NAME = "GW2Explorer"
+    GROWL_NOTIFICATION_TYPE = "Events"
+
+    @@growl = nil
+
+    def send_growl_notification (title, msg)
+      if @@growl.nil? then
+	@@growl = Growl.new("localhost", GROWL_APP_NAME)
+	@@growl.add_notification(GROWL_NOTIFICATION_TYPE)
+      end
+      @@growl.notify(GROWL_NOTIFICATION_TYPE, title, msg)
+    end
+
+    public
+
+    def initialize
+      @notify_list = []
+    end
+
+    def record(event)
+      @notify_list << event
+    end
+
+    def send
+      if not @notify_list.empty?
+	msg = ""
+	@notify_list.each { |event|
+	  state = event.state
+	  if state == "Warmup" then
+	    state = "Inactive"
+	  end
+	  msg << "#{state}: #{event.name}\n\n"
+	}
+	send_growl_notification("Events", msg)
+	@notify_list = []
+      end
+    end
+  end
+
+
+  #############################################################################
+  #
+  # Options handling class
+  #
+  #############################################################################
 
   class Options
     def initialize(file = nil)
@@ -126,6 +160,7 @@ class GW2EventExplorer
       @options[:update_interval] = DEFAULT_UPDATE_INTERVAL
       @options[:time24] = false
       @options[:notify_events] = {}
+      @options[:event_logging] = false
 
       if file and File.exists?(file) then
         load(file)
@@ -159,6 +194,13 @@ class GW2EventExplorer
     end
 
   end	# class Options
+
+
+  #############################################################################
+  # GW2EventExplorer methods
+  #############################################################################
+
+  private
 
   def get_states()
     states = []
@@ -281,28 +323,6 @@ class GW2EventExplorer
     @options[:notify_events] = @notify_events
   end
 
-#   def update_and_look_for_changes
-#     changes = []
-#     if (@current_world_id == @previous_world_id) and 
-# 	not (@previous_world_events.nil? ||
-# 	     @previous_world_events.empty?) then
-#       @world_events.each { |event|
-# 	id = event.event_id
-# 	previous_state = @previous_world_index[id]
-# 	if previous_state then
-# 	  if event.state_num != previous_state.state_num then
-# 	    # keep current event.change_time
-# 	    changes << event
-# 	  else
-# 	    # reset event.change_time back to the previous state
-# 	    event.change_time = previous_state.change_time
-# 	  end
-# 	end
-#       }
-#     end
-#     return changes
-#   end
-
   def update_world_events(world_id)
     if @current_world_id == world_id then
       if !@first_update then
@@ -332,9 +352,6 @@ class GW2EventExplorer
 	@event_matcher.set_map(map_id)
 	@event_matcher.set_events(display_events)
 	@event_matcher.set_types(states)
-# 	@previous_world_id = @current_world_id
-# 	@previous_world_events = @world_events
-# 	@previous_world_index = @world_index
 
 	if world_id != @current_world_id then
 	  update_world_events(world_id)
@@ -343,14 +360,6 @@ class GW2EventExplorer
 	#print "Number of world events = #{@world_events.size}\n"
 
 	#File.open("data.dat", "w") { |f| YAML.dump(@world_events, f) }
-
-# 	@world_index = {}
-# 	@world_events.each { |event|
-# 	  @world_index[event.event_id] = event
-# 	}
-
-# 	changes = update_and_look_for_changes
-# 	#pp changes
 
 	events = @event_matcher.filter_events(@world_events)
 	@events_to_display = GW2::EventItem.sort_list(events)
@@ -577,7 +586,143 @@ class GW2EventExplorer
     return (MAX_KEEP_TIME * 3600) / @update_interval
   end
 
-  def initialize(manager)
+  def process_data_update(world)
+    GW2::DebugLog.print "\nGOT UPDATE (#{world}/#{world.class})\n\n"
+    @data_manager.db_synchronize {
+      if world.class == String then
+        world_id = @data_manager.world_id_from_name(world)
+      else
+        world_id = world
+      end
+
+      GW2::DebugLog.print "Update world '#{world}' (#{world_id})\n"
+      @data_manager.update_eventdata(world_id)
+    }
+  end
+
+  def thread_do_update
+    update_count = 0
+    while true
+      world_id = @task_queue.pop
+      begin
+        begin
+          GW2::DebugLog.print "Update request for world id '#{world_id}'\n"
+	  s0 = Time.now
+          @updating = true
+
+          process_data_update(world_id)
+	  update_world_events(world_id)
+
+	  @gui_queue.push("update")
+	  update_count = update_count + 1
+	  @data_manager.db_synchronize {
+	    g = @data_manager.get_update_generations(world_id)
+	    if g.size > max_generations then
+	      cutoff = g[max_generations]
+	      GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
+	      @data_manager.delete_old_generations(cutoff)
+
+	      # We only do vacuum checks if we delete
+	      if update_count % VACUUM_ITERATIONS == 0 then
+		s = Time.now
+		GW2::DebugLog.print "Vacuuming ...\n"
+		@data_manager.vacuum
+		GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
+	      end
+	    end
+	  }
+	  if @check_notify then
+	    GW2::DebugLog.print "Checking notify\n"
+	    if @world_events then
+	      notifier = Notifier.new
+	      @world_events.each { |event|
+		notify_type = @notify_events[event.event_id]
+		if notify_type then
+		  #print "Notify data exists for event \"#{event.name}\" (#{event.event_id})\n"
+		  if (event.update_time - event.last_change_time).abs < 1 then
+		    do_notify = false
+		    if notify_type == :any then
+		      do_notify = true
+		    elsif notify_type == :active_prep then
+		      if event.state_num == GW2::STATE_ACTIVE_NUM ||
+			  event.state_num == GW2::STATE_PREPARATION_NUM then
+			do_notify = true
+		      end
+		    elsif notify_type.is_a?(Fixnum) &&
+			event.state_num == notify_type then
+		      do_notify = true
+		    end
+		    if do_notify then
+		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} at time '#{event.last_change_time}' (#{event.update_time})\n"
+		      notifier.record(event)
+		    end
+		  end
+		end
+	      }
+	      notifier.send
+	      @check_notify = false
+	    else
+	      GW2::DebugLog.print "NOT checking notify\n"
+	    end
+	  end
+          GW2::DebugLog.print "Update request done (#{(Time.now - s0).to_s} sec)\n"
+        ensure
+          @updating = false
+        end
+      rescue => e
+        if not GW2::DebugLog.active() then
+          GW2::DebugLog.open_stream(DEBUGLOG_FILE)
+        end
+        GW2::DebugLog.print "\n***** Caught exception at #{Time.now}!\n#{e}\n\n"
+        stacktrace = e.backtrace.join("\n")
+        GW2::DebugLog.print "Stacktrace:\n#{stacktrace}\n"
+        GW2::DebugLog.print "\n\n"
+      end
+    end
+  end
+
+  def gui_monitor
+    world_id = nil
+    last_update_time = nil
+    @data_manager.db_synchronize {
+      world_id = @data_manager.world_id_from_name(@server_wid.to_s)
+      last_update_time = @data_manager.get_last_update_time(world_id)
+    }
+    #print "last update time = #{last_update_time} (now: #{Time.now})\n"
+    current_time = Time.now
+    if (current_time - last_update_time).to_f > @update_interval then
+      if @last_request_time[world_id].nil? ||
+         ((current_time - @last_request_time[world_id]) >= ABSOLUTE_MIN_UPDATE_TIME) then
+        if not @updating then
+          @last_request_time[world_id] = current_time
+          GW2::DebugLog.print "Sending update request for '#{@server_wid.to_s}' (#{world_id}) at '#{@last_request_time[world_id]}'\n"
+	  s = Time.now
+          @task_queue.push(world_id)
+          GW2::DebugLog.print "   ... update request took #{(Time.now - s).to_s} sec\n"
+        end
+      else
+        GW2::DebugLog.print "***** Not sending request (#{(current_time - @last_request_time[world_id]).to_f} < #{ABSOLUTE_MIN_UPDATE_TIME})\n"
+      end
+    end
+    if not @gui_queue.empty? then
+      item = @gui_queue.pop
+      GW2::DebugLog.print "Got back: '#{item}'\n"
+      update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
+		     @display_events)
+      if DEBUG_TIMINGS then
+	if @last_request_time[world_id] then
+	  GW2::DebugLog.print "Update time = #{(Time.now - @last_request_time[world_id]).to_s}\n"
+	else
+	  GW2::DebugLog.print "last_request_time is nil??\n"
+	end
+      end
+    end
+    Tk.after(1000, proc { gui_monitor } )
+  end
+
+  public
+
+  def initialize()
     super()	# needed to initialize MonitorMixin
 
     @notify_event_vars = []
@@ -587,9 +732,6 @@ class GW2EventExplorer
     @current_world_id = nil
     @world_events = nil
     @check_notify = false
-#     @world_index = nil
-#     @previous_world_events = nil
-#     @previous_world_index = nil
     @events_to_display = nil
 
     @event_frame = nil
@@ -605,16 +747,14 @@ class GW2EventExplorer
     end
 
     @event_matcher = GW2::EventMatcher.new
-#     if not @special_events.empty? then
-#       @event_matcher.set_events(@special_events)
-#     end
 
     @display_events = {}
     update_display_events
 
     @delwids = []
 
-    @data_manager = manager
+    @data_manager = GW2::EventManager.new(DATABASE_FILE,
+					  @options[:event_logging])
 
     @update_interval = @options[:update_interval] || DEFAULT_UPDATE_INTERVAL
     if @update_interval < ABSOLUTE_MIN_UPDATE_TIME
@@ -897,144 +1037,17 @@ class GW2EventExplorer
 
     Tk.after(1000, proc { gui_monitor })
 
-  end
-
-  def process_data_update(world)
-    GW2::DebugLog.print "\nGOT UPDATE (#{world}/#{world.class})\n\n"
-    @data_manager.db_synchronize {
-      if world.class == String then
-        world_id = @data_manager.world_id_from_name(world)
-      else
-        world_id = world
-      end
-
-      GW2::DebugLog.print "Update world '#{world}' (#{world_id})\n"
-      @data_manager.update_eventdata(world_id)
-    }
-  end
-
-  def thread_do_update
-    update_count = 0
-    while true
-      world_id = @task_queue.pop
-      begin
-        begin
-          GW2::DebugLog.print "Update request for world id '#{world_id}'\n"
-          @updating = true
-
-          process_data_update(world_id)
-	  update_world_events(world_id)
-
-	  @gui_queue.push("update")
-	  update_count = update_count + 1
-	  @data_manager.db_synchronize {
-	    g = @data_manager.get_update_generations(world_id)
-	    if g.size > max_generations then
-	      cutoff = g[max_generations]
-	      GW2::DebugLog.print "Deleting generations #{cutoff} and before\n"
-	      @data_manager.delete_old_generations(cutoff)
-
-	      # We only do vacuum checks if we delete
-	      if update_count % VACUUM_ITERATIONS == 0 then
-		s = Time.now
-		GW2::DebugLog.print "Vacuuming ...\n"
-		@data_manager.vacuum
-		GW2::DebugLog.print "Vacuuming done (#{(Time.now - s).to_f}).\n"
-	      end
-	    end
-	  }
-	  if @check_notify then
-	    GW2::DebugLog.print "Checking notify\n"
-	    if @world_events then
-	      @world_events.each { |event|
-		notify_type = @notify_events[event.event_id]
-		if notify_type then
-		  #print "Notify data exists for event \"#{event.name}\" (#{event.event_id})\n"
-		  if (event.update_time - event.last_change_time).abs < 1 then
-		    do_notify = false
-		    if notify_type == :any then
-		      do_notify = true
-		    elsif notify_type == :active_prep then
-		      if event.state_num == GW2::STATE_ACTIVE_NUM ||
-			  event.state_num == GW2::STATE_PREPARATION_NUM then
-			do_notify = true
-		      end
-		    elsif notify_type.is_a?(Fixnum) &&
-			event.state_num == notify_type then
-		      do_notify = true
-		    end
-		    if do_notify then
-		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} at time '#{event.last_change_time}' (#{event.update_time})\n"
-		    end
-		  end
-		end
-	      }
-	      @check_notify = false
-	    else
-	      GW2::DebugLog.print "NOT checking notify\n"
-	    end
-	  end
-        ensure
-          @updating = false
-        end
-      rescue => e
-        if not GW2::DebugLog.active() then
-          GW2::DebugLog.open_stream(DEBUGLOG_FILE)
-        end
-        GW2::DebugLog.print "\n***** Caught exception at #{Time.now}!\n#{e}\n\n"
-        stacktrace = e.backtrace.join("\n")
-        GW2::DebugLog.print "Stacktrace:\n#{stacktrace}\n"
-        GW2::DebugLog.print "\n\n"
-      end
-    end
-  end
-
-  def gui_monitor
-    world_id = nil
-    last_update_time = nil
-    @data_manager.db_synchronize {
-      world_id = @data_manager.world_id_from_name(@server_wid.to_s)
-      last_update_time = @data_manager.get_last_update_time(world_id)
-    }
-    #print "last update time = #{last_update_time} (now: #{Time.now})\n"
-    current_time = Time.now
-    if (current_time - last_update_time).to_f > @update_interval then
-      if @last_request_time[world_id].nil? ||
-         ((current_time - @last_request_time[world_id]) >= ABSOLUTE_MIN_UPDATE_TIME) then
-        if not @updating then
-          @last_request_time[world_id] = current_time
-          GW2::DebugLog.print "Sending update request for '#{@server_wid.to_s}' (#{world_id}) at '#{@last_request_time[world_id]}'\n"
-          @task_queue.push(world_id)
-        end
-      else
-        GW2::DebugLog.print "***** Not sending request (#{(current_time - @last_request_time[world_id]).to_f} < #{ABSOLUTE_MIN_UPDATE_TIME})\n"
-      end
-    end
-    if not @gui_queue.empty? then
-      item = @gui_queue.pop
-      GW2::DebugLog.print "Got back: '#{item}'\n"
-      update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
-		     @display_events)
-      if DEBUG_TIMINGS then
-	if @last_request_time[world_id] then
-	  GW2::DebugLog.print "Update time = #{(Time.now - @last_request_time[world_id]).to_s}\n"
-	else
-	  GW2::DebugLog.print "last_request_time is nil??\n"
-	end
-      end
-    end
-    Tk.after(1000, proc { gui_monitor } )
-  end
+  end	# initialize
 
 end
 
 
-def error_msg_popup(title, msg)
-  msgBox = Tk.messageBox('type'    => "ok",
-			 'icon'    => "error",
-			 'title'   => title,
-			 'message' => msg)
-end
+# def error_msg_popup(title, msg)
+#   msgBox = Tk.messageBox('type'    => "ok",
+# 			 'icon'    => "error",
+# 			 'title'   => title,
+# 			 'message' => msg)
+# end
 
 
 if GW2EventExplorer::DEBUG then
@@ -1043,9 +1056,7 @@ if GW2EventExplorer::DEBUG then
 end
 
 begin
-  data_manager = GW2::EventManager.new(GW2EventExplorer::DATABASE_FILE)
-
-  gui = GW2EventExplorer.new(data_manager)
+  gui = GW2EventExplorer.new()
 
   Tk.mainloop
 
