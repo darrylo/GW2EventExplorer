@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 31 20:00:36 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Sat Jun 01 05:03:20 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -55,8 +55,8 @@ load "gw2data.rb"
 class GW2EventExplorer
   include MonitorMixin
 
-  DEBUG = false
-  DEBUG_TIMINGS = false
+  DEBUG = true
+  DEBUG_TIMINGS = true
 
   DATABASE_FILE = "gw2events.sqlite"
   OPTIONS_FILE = "gw2explorer.cfg"
@@ -676,9 +676,9 @@ class GW2EventExplorer
 		    # Here, we ignore any success->warmup or fail->warmup
 		    # transitions, as we consider that to be noise.
 		    #
-		    if ! (event.state_num == GW2::STATE_WARMUP &&
-			  (event.previous_state_num == GW2::STATE_SUCCESS ||
-			   event.previous_state_num == GW2::STATE_FAIL)) then
+		    if ! (event.state_num == GW2::STATE_WARMUP_NUM &&
+			  (event.previous_state_num == GW2::STATE_SUCCESS_NUM ||
+			   event.previous_state_num == GW2::STATE_FAIL_NUM)) then
 		      if notify_type == :any then
 			do_notify = true
 		      elsif notify_type == :active_prep then
@@ -692,7 +692,7 @@ class GW2EventExplorer
 		      end
 		    end
 		    if do_notify then
-		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} (#{event.previous_state}) at time '#{event.last_change_time}' (#{event.update_time})\n"
+		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} (#{event.previous_state}, #{event.state_num}/#{event.previous_state_num}, #{GW2::STATE_WARMUP_NUM}, #{GW2::STATE_SUCCESS_NUM}, #{GW2::STATE_FAIL_NUM}) at time '#{event.last_change_time}' (#{event.update_time})\n"
 		      notifier.record(event)
 		    end
 		  end
