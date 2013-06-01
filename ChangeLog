@@ -1,4 +1,10 @@
+2013-06-01    <darrylo@fake.domain>
+
+	* Version 0.2 released
+
 2013-05-31    <darrylo@fake.domain>
+
+	* For each event, keep the previous event state, too.
 
 	* Event update time reduced to every 60 seconds.  This is both a
 	  blessing and a curse, as the poor ruby threading results in the

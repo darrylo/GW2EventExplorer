@@ -1,7 +1,7 @@
 GW2EventExplorer -- A desktop app for browsing Guild Wars 2 events
 ==================================================================
 
-Version: 0.2, May 31, 2013
+Version: 0.2, Jun 1, 2013
 IMPORTANT NOTE: See the first issue under, "Known Issues", below.
 
 GW2Explorer.rbw is a crude ruby script that allows you to browse Guild
@@ -202,3 +202,10 @@ Possible future tasks, in no particular order:
 * Unlike sticky events, should there be a way to always "hide" an event?
 
 * The ability to limit event display via a regular expression.
+
+* Optional client/server mode: a server for handling the event data
+  gathering/processing, and a separate GUI for displaying the results and
+  handling notifications.
+
+* Use a real SQL database like postgres or mariadb for storing data.  It would
+  really be nice to be able to store at least one month's of data.

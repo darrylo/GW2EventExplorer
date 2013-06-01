@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 31 13:56:54 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 31 20:00:36 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -55,8 +55,8 @@ load "gw2data.rb"
 class GW2EventExplorer
   include MonitorMixin
 
-  DEBUG = true
-  DEBUG_TIMINGS = true
+  DEBUG = false
+  DEBUG_TIMINGS = false
 
   DATABASE_FILE = "gw2events.sqlite"
   OPTIONS_FILE = "gw2explorer.cfg"
@@ -591,10 +591,24 @@ class GW2EventExplorer
   end
 
   def terminate
-    while @updating
-      sleep(1)
+    begin
+      retries = 0
+      while @updating && (retries < 20)
+	sleep(1)
+	retries = retries + 1
+      end
+      save
+    rescue
+      #
+      # Catch any exceptions and dump them to a log file
+      #
+      if not GW2::DebugLog.active() then
+	GW2::DebugLog.open_stream(GW2EventExplorer::DEBUGLOG_FILE)
+      end
+      GW2::DebugLog.print "\n\n\n***** Crash log started at #{Time.now} *****\n\n"
+      stacktrace = exc.backtrace.join("\n")
+      GW2::DebugLog.print "Exception occurred during termination:\n\n#{exc}\n\n#{stacktrace}\n\n"
     end
-    save
     exit
   end
 
