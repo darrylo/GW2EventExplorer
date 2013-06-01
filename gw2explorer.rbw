@@ -11,7 +11,7 @@
 #
 # Author:       Darryl Okahata
 # Created:      Tue May 21 21:02:42 2013
-# Modified:     Fri May 31 03:54:51 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 31 13:56:54 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -74,8 +74,10 @@ class GW2EventExplorer
   DEFAULT_UPDATE_INTERVAL = 60
   ABSOLUTE_MIN_UPDATE_TIME = 45
 
-  # How much data to keep, in hours.
-  MAX_KEEP_TIME =  1
+  # How much data to keep, in seconds.  This time, divided by the update time,
+  # must allow at least 2 sets of event data to be kept (the current plus the
+  # previous set) -- if not, bad things will happen.
+  DEFAULT_MAX_KEEP_TIME =  3 * DEFAULT_UPDATE_INTERVAL	# seconds
 
   # Vacuum the database every VACUUM_ITERATIONS.
   VACUUM_ITERATIONS = 10
@@ -299,29 +301,43 @@ class GW2EventExplorer
     return (@special_events[event.event_id] == :group)
   end
 
-  def rebuild_notify_events()
-    @notify_events = {}
-    if @events_to_display then
-      event_index = 0
-      @events_to_display.each { |event|
-	var = @notify_event_vars[event_index]
-	if var then
-	  val = var.value
-	  if val != NO_NOTIFY_VALUE then
-	    if val == ANY_NOTIFY_VALUE then
-	      @notify_events[event.event_id] = :any
-	    elsif val == ACTIVE_PREP_NOTIFY_VALUE then
-	      @notify_events[event.event_id] = :active_prep
-	    else
-	      @notify_events[event.event_id] = GW2.state_to_int(val)
-	    end
-	  end
-	end
-	event_index = event_index + 1
-      }
+  def update_notify_event(event_id, notify_var)
+    value = notify_var.value
+    if value == NO_NOTIFY_VALUE then
+      @notify_events[event_id] = nil
+    elsif value == ANY_NOTIFY_VALUE then
+      @notify_events[event_id] = :any
+    elsif value == ACTIVE_PREP_NOTIFY_VALUE then
+      @notify_events[event_id] = :active_prep
+    else
+      @notify_events[event_id] = GW2.state_to_int(value)
     end
-    @options[:notify_events] = @notify_events
+    #print "#{@data_manager.get_event_name(event_id)}, #{@notify_events[event_id]}\n"
   end
+
+#   def rebuild_notify_events()
+#     @notify_events = {}
+#     if @events_to_display then
+#       event_index = 0
+#       @events_to_display.each { |event|
+# 	var = @notify_event_vars[event_index]
+# 	if var then
+# 	  val = var.value
+# 	  if val != NO_NOTIFY_VALUE then
+# 	    if val == ANY_NOTIFY_VALUE then
+# 	      @notify_events[event.event_id] = :any
+# 	    elsif val == ACTIVE_PREP_NOTIFY_VALUE then
+# 	      @notify_events[event.event_id] = :active_prep
+# 	    else
+# 	      @notify_events[event.event_id] = GW2.state_to_int(val)
+# 	    end
+# 	  end
+# 	end
+# 	event_index = event_index + 1
+#       }
+#     end
+#     @options[:notify_events] = @notify_events
+#   end
 
   def update_world_events(world_id)
     if @current_world_id == world_id then
@@ -449,7 +465,7 @@ class GW2EventExplorer
 
     @event_widget.grid :sticky => "nsew"
 
-    @root.update
+    #@root.update
 
     # @event_widget.delete("1.0", "end")
     event_index = 0
@@ -535,11 +551,11 @@ class GW2EventExplorer
         background bgcolor
 	values notify_states
       }
+      id = event_item.event_id
       notify_wid.state(:readonly)
       notify_wid.bind("<ComboboxSelected>") { 
-	rebuild_notify_events
-        #update_display(@server_wid.to_s, @map_wid.to_s, get_states(),
-      	#	       @display_events)
+	update_notify_event(id, notify_var)
+	#rebuild_notify_events
       }
       newwin = TkTextWindow.new(@event_widget, 'end', :window => notify_wid)
       @delwids << newwin << notify_wid
@@ -575,15 +591,15 @@ class GW2EventExplorer
   end
 
   def terminate
-    save
     while @updating
       sleep(1)
     end
+    save
     exit
   end
 
   def max_generations
-    return (MAX_KEEP_TIME * 3600) / @update_interval
+    return (@max_keep_time / @update_interval).to_i
   end
 
   def process_data_update(world)
@@ -641,19 +657,28 @@ class GW2EventExplorer
 		  #print "Notify data exists for event \"#{event.name}\" (#{event.event_id})\n"
 		  if (event.update_time - event.last_change_time).abs < 1 then
 		    do_notify = false
-		    if notify_type == :any then
-		      do_notify = true
-		    elsif notify_type == :active_prep then
-		      if event.state_num == GW2::STATE_ACTIVE_NUM ||
-			  event.state_num == GW2::STATE_PREPARATION_NUM then
+
+		    #
+		    # Here, we ignore any success->warmup or fail->warmup
+		    # transitions, as we consider that to be noise.
+		    #
+		    if ! (event.state_num == GW2::STATE_WARMUP &&
+			  (event.previous_state_num == GW2::STATE_SUCCESS ||
+			   event.previous_state_num == GW2::STATE_FAIL)) then
+		      if notify_type == :any then
+			do_notify = true
+		      elsif notify_type == :active_prep then
+			if event.state_num == GW2::STATE_ACTIVE_NUM ||
+			    event.state_num == GW2::STATE_PREPARATION_NUM then
+			  do_notify = true
+			end
+		      elsif notify_type.is_a?(Fixnum) &&
+			  event.state_num == notify_type then
 			do_notify = true
 		      end
-		    elsif notify_type.is_a?(Fixnum) &&
-			event.state_num == notify_type then
-		      do_notify = true
 		    end
 		    if do_notify then
-		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} at time '#{event.last_change_time}' (#{event.update_time})\n"
+		      GW2::DebugLog.print "Notify for event \"#{event.name}\", #{event.state} (#{event.previous_state}) at time '#{event.last_change_time}' (#{event.update_time})\n"
 		      notifier.record(event)
 		    end
 		  end
@@ -720,10 +745,22 @@ class GW2EventExplorer
     Tk.after(1000, proc { gui_monitor } )
   end
 
+  def set_update_interval(secs)
+    if secs < ABSOLUTE_MIN_UPDATE_TIME + 1 then
+      secs = ABSOLUTE_MIN_UPDATE_TIME + 1
+    end
+    @update_interval = secs
+    if @max_keep_time < secs * 3 then
+      @max_keep_time = secs * 3
+    end
+  end
+
   public
 
   def initialize()
     super()	# needed to initialize MonitorMixin
+
+    @max_keep_time = DEFAULT_MAX_KEEP_TIME
 
     @notify_event_vars = []
     @notify_events = {}			# irrelevant, because of below
@@ -756,11 +793,7 @@ class GW2EventExplorer
     @data_manager = GW2::EventManager.new(DATABASE_FILE,
 					  @options[:event_logging])
 
-    @update_interval = @options[:update_interval] || DEFAULT_UPDATE_INTERVAL
-    if @update_interval < ABSOLUTE_MIN_UPDATE_TIME
-      # No way do we allow anything smaller than this
-      @update_interval = ABSOLUTE_MIN_UPDATE_TIME
-    end
+    set_update_interval(@options[:update_interval] || DEFAULT_UPDATE_INTERVAL)
 
     @worlds = @data_manager.get_world_names()
 

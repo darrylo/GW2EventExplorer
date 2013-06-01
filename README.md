@@ -190,6 +190,9 @@ Possible future tasks, in no particular order:
   that you want to be told when a major pre-event occurs for Tequatl, Shadow
   Behemoth, etc., etc..
 
+* Need to be able to save/restore event notification sets.  Perhaps allow the
+  user to define multiple notification profiles?
+
 * Configurable update times.  Right now, updates occur every 5 minutes.
 
 * "Sticky events"  This is the ability to mark an event as "sticky",

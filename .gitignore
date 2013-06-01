@@ -166,4 +166,5 @@ pip-log.txt
 *~
 gw2explorer.cfg
 *.sqlite
-gw2events-debug.log
+*.log
+work

@@ -7,7 +7,7 @@
 #		it into a sqlite database
 # Author:       Darryl Okahata
 # Created:      Tue May 21 18:05:39 2013
-# Modified:     Fri May 31 04:23:22 2013 (Darryl Okahata) darryl@fake.domain
+# Modified:     Fri May 31 09:50:05 2013 (Darryl Okahata) darryl@fake.domain
 # Language:     Ruby
 # Package:      N/A
 # Status:       Experimental
@@ -284,11 +284,12 @@ module GW2
       return data.sort { |a,b| EventItem.sorter(a,b) }
     end
 
-    def initialize(world_id, map_id, event_id, state, generation, last_changed)
+    def initialize(world_id, map_id, event_id, state, previous_state, generation, last_changed)
       @world_id = world_id
       @map_id = map_id
       @event_id = event_id
       @state = state
+      @previous_state = previous_state
       @generation = generation
       @update_time = @@generations[@generation]
       @last_changed = last_changed
@@ -316,6 +317,14 @@ module GW2
 
     def state
       return GW2.int_to_state(@state)
+    end
+
+    def previous_state_num
+      return @previous_state
+    end
+
+    def previous_state
+      return GW2.int_to_state(@previous_state)
     end
 
     def update_time
@@ -392,7 +401,7 @@ module GW2
       end
     end
 
-    CURRENT_DATABASE_VERSION = 1
+    CURRENT_DATABASE_VERSION = 2
 
     def get_version
       cmd = "PRAGMA user_version;"
@@ -425,6 +434,12 @@ module GW2
       @db.transaction {
 	if current_db_ver < 1 then
 	  cmd = "ALTER TABLE event_data ADD COLUMN last_changed REAL DEFAULT 0;"
+	  @db.execute(cmd)
+	end
+	if current_db_ver < 2 then
+	  cmd = "ALTER TABLE event_data ADD COLUMN previous_state INTEGER DEFAULT 0;"
+	  @db.execute(cmd)
+	  cmd = "ALTER TABLE event_log_data ADD COLUMN previous_state INTEGER DEFAULT 0;"
 	  @db.execute(cmd)
 	end
 	set_version(CURRENT_DATABASE_VERSION)
@@ -578,8 +593,8 @@ module GW2
 
     def check_eventdata_table()
       # We create both tables here.
-      @db.execute("CREATE TABLE IF NOT EXISTS event_data (generation INTEGER, world INTEGER, map INTEGER, event_id TEXT, state INTEGER, last_changed REAL);")
-      @db.execute("CREATE TABLE IF NOT EXISTS event_log_data (world INTEGER, map INTEGER, event_id TEXT, state INTEGER, last_changed REAL);")
+      @db.execute("CREATE TABLE IF NOT EXISTS event_data (generation INTEGER, world INTEGER, map INTEGER, event_id TEXT, state INTEGER, previous_state INTEGER, last_changed REAL);")
+      @db.execute("CREATE TABLE IF NOT EXISTS event_log_data (world INTEGER, map INTEGER, event_id TEXT, state INTEGER, previous_state INTEGER, last_changed REAL);")
     end
 
     def get_current_generation
@@ -637,6 +652,7 @@ module GW2
             event_id = item['event_id']
             state = GW2.state_to_int(item['state'])
 
+	    previous_state = 0
 	    last_changed = update_time.to_f
 	    if @event_logging then
 	      update_log = true
@@ -656,41 +672,35 @@ module GW2
 		  last_changed = previous_event.last_changed
 		  update_log = false
 		end
+		previous_state = previous_event.state_num
 	      end
 	    else
 	      # Don't update the log
 	      update_log = false
 	    end
 
-            cmd = "INSERT OR REPLACE INTO event_data (generation,world,map,event_id,state,last_changed) VALUES ('#{@current_generation}',#{world},#{map},'#{event_id}','#{state}',#{last_changed});"
+            cmd = "INSERT OR REPLACE INTO event_data (generation,world,map,event_id,state,previous_state,last_changed) VALUES ('#{@current_generation}',#{world},#{map},'#{event_id}',#{state},#{previous_state},#{last_changed});"
             @db.execute(cmd)
 
 	    if update_log then
-	      cmd = "INSERT OR REPLACE INTO event_log_data (world,map,event_id,state,last_changed) VALUES (#{world},#{map},'#{event_id}','#{state}',#{last_changed});"
+	      cmd = "INSERT OR REPLACE INTO event_log_data (world,map,event_id,state,previous_state,last_changed) VALUES (#{world},#{map},'#{event_id}',#{state},#{previous_state},#{last_changed});"
 	      @db.execute(cmd)
 	      log_updated = true
 	    end
-
-	    #events << EventItem.new(world, map, event_id, state,
-	    #			    @current_generation)
           }
           @db.execute("INSERT INTO generation_data (generation,update_time) VALUES ('#{@current_generation}',#{update_time.to_f});")
-          #@db.execute("DROP INDEX IF EXISTS event_index;")
           @db.execute("CREATE INDEX IF NOT EXISTS event_index ON event_data (generation,world,map,event_id,state,last_changed);")
 	  if log_updated then
 	    @db.execute("CREATE INDEX IF NOT EXISTS event_log_index ON event_data (world,map,event_id,state,last_changed);")
 	  end
 	  @db.execute("REINDEX;")
 	  @db.execute("ANALYZE;")
-	  #snapshot = EventsSnapshot.new(events, update_time)
         }
-        # @db.execute("VACUUM;")
 	GW2::DebugLog.print "Transaction took #{(Time.now - s).to_s} sec\n"
       else
         GW2::DebugLog.print "***** NO DATA RECEIVED\n"
       end
       update_generations
-      #return snapshot
       return nil
     end
 
@@ -768,7 +778,7 @@ module GW2
       if limit then
 	limit_cmd = "LIMIT #{limit}"
       end
-      cmd = "SELECT DISTINCT generation FROM event_data WHERE world = #{world} ORDER BY generation DESC #{limit_cmd};"
+      cmd = "SELECT DISTINCT generation FROM event_data INDEXED BY event_index WHERE world = #{world} ORDER BY generation DESC #{limit_cmd};"
       data = @db.execute(cmd)
       if data and data.size > 0 then
         data.each { |result|
@@ -801,7 +811,7 @@ module GW2
     end
 
     def get_last_update_generation(world)
-      cmd = "SELECT DISTINCT generation FROM event_data WHERE world = #{world} ORDER BY generation DESC LIMIT 1;"
+      cmd = "SELECT DISTINCT generation FROM event_data INDEXED BY event_index WHERE world = #{world} ORDER BY generation DESC LIMIT 1;"
       #pp cmd
       data = @db.execute(cmd)
       if data and data.size > 0 then
@@ -867,7 +877,7 @@ module GW2
       end
 
       cmd =
-"SELECT event_data.world,event_data.map,event_data.event_id,event_data.state,event_data.generation,event_data.last_changed FROM event_data INNER JOIN
+"SELECT event_data.world,event_data.map,event_data.event_id,event_data.state,event_data.previous_state,event_data.generation,event_data.last_changed FROM event_data INDEXED BY event_index INNER JOIN
 (
    SELECT event_id, MAX(generation) as maxgeneration
    FROM event_data #{worldspec}
@@ -885,11 +895,12 @@ ON event_data.generation = m.maxgeneration
         map = item[1]
         event_id = item[2]
         state = item[3]
-        generation = item[4]
-	last_changed = item[5]
+	previous_state = item[4]
+        generation = item[5]
+	last_changed = item[6]
 
-        newitem = EventItem.new(world, map, event_id, state, generation,
-				last_changed)
+        newitem = EventItem.new(world, map, event_id, state, previous_state,
+				generation, last_changed)
         data << newitem
       }
       GW2::DebugLog.print "get_eventdata() took #{(Time.now - s).to_s} sec\n"
@@ -911,7 +922,7 @@ ON event_data.generation = m.maxgeneration
 
     def get_log_data
       data = []
-      cmd = "SELECT world,map,event_id,state,last_changed FROM event_log_data;"
+      cmd = "SELECT world,map,event_id,state,previous_state,last_changed FROM event_log_data;"
       results = @db.execute(cmd)
       if results then
 	results.each { |column|
@@ -919,9 +930,11 @@ ON event_data.generation = m.maxgeneration
 	  map = column[1]
 	  event_id = column[2]
 	  state = column[3]
-	  last_changed = column[4]
+	  previous_state = column[4]
+	  last_changed = column[5]
 
-	  data << EventItem.new(world, map, event_id, state, 0, last_changed)
+	  data << EventItem.new(world, map, event_id, state, previous_state,
+				0, last_changed)
 	}
       end
       return data
@@ -997,6 +1010,10 @@ ON event_data.generation = m.maxgeneration
 
     def get_map_name(id)
       return @database.map_name(id)
+    end
+
+    def get_event_name(id)
+      return @database.event_name(id)
     end
 
     def get_update_generations(world)
@@ -1101,6 +1118,9 @@ ON event_data.generation = m.maxgeneration
 
     def match(event)	# event is of type EventItem
       if @events && @events[event.event_id] then
+	if @types && ! @types[event.state_num] then
+	  return false
+	end
 	return true
       end
       if @world && @world != event.world_id then
