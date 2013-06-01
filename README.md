@@ -20,16 +20,18 @@ Right now, you are limited to:
   events on a particular map and not the entire server -- see, "Known Issues",
   below.)
 
-  The list of group events is stored in the CSV file, "group_events.csv", and
+* You can filter the display by event status: active, failed, success, warmup,
+  or preparation.  There is also a "All Group Events" selection, which adds
+  group events to the display (this ignores the currently selected map, and
+  will always display the event if selected).  Group events are marked with a
+  "(G)" in front of the description.
+
+* The list of group events is stored in the CSV file, "group_events.csv", and
   comes from Tiscan.8345, obtained via:
 
     https://forum-en.guildwars2.com/forum/community/api/List-of-all-group-events
 
-* You can filter the display by event status: active, failed, success, warmup,
-  or preparation.  There is also a "AllGroup Events" selection, which adds
-  group events to the display (this ignores the currently selected map, and
-  will always display the event if selected).  Group events are marked with a
-  "(G)" in front of the description.
+  This file is read at startup.
 
 * The events automatically update every minute (60 seconds -- this will be
   configurable in a future version).
@@ -71,6 +73,7 @@ Requirements
 * You must have installed the following gems:
 
     gem install ruby-growl
+
     gem install sqlite3
 
 * (Windows) You need to obtain the SQLite DLL.  Go to the [sqlite download
@@ -88,7 +91,7 @@ Requirements
   If you want iOS/android/WP7 smartphone/tablet notifications, you need to buy
   and configure one of the notification apps supported by growl-for-windows.
   See the growl-for-windows website for supported apps (some of which also
-  work on tablets).  Note that you'll have to do additional app-specific=
+  work on tablets).  Note that you'll have to do additional app-specific
   configuration.
 
   Personally, for iOS, I happen to like the [Prowl
@@ -193,7 +196,7 @@ Possible future tasks, in no particular order:
 * Need to be able to save/restore event notification sets.  Perhaps allow the
   user to define multiple notification profiles?
 
-* Configurable update times.  Right now, updates occur every 5 minutes.
+* Configurable update times.  Right now, updates occur every minute.
 
 * "Sticky events"  This is the ability to mark an event as "sticky",
   which means that it will always be shown, even if you have limited the
